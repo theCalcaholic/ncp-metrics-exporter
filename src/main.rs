@@ -20,7 +20,7 @@ async fn main() -> std::result::Result<(), std::io::Error> {
     let mut registry = Registry::default();
     let backup_freshness = backups::get_backup_freshness();
     registry.register(
-        "backup_freshness",
+        "ncp_backup_freshness",
         "Age of the latest backup in minutes",
         backup_freshness.clone(),
     );
