@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use tide::{Middleware, Next, Request, Result};
+use tide::log;
 use std::env;
 use std::path::Iter;
 use shellwords::split;
@@ -13,7 +14,7 @@ use crate::backups::BackupLabels;
 
 #[async_std::main]
 async fn main() -> std::result::Result<(), std::io::Error> {
-    tide::log::start();
+    log::start();
 
     let mut registry = Registry::default();
     let backup_freshness = backups::get_backup_freshness();
@@ -67,9 +68,13 @@ fn gather_metrics(backup_freshness: &MutexGuard<Family<BackupLabels, Gauge>>) {
 
     let backup_paths_string = env::var("NCPMETRICS_BACKUP_PATHS")
         .unwrap_or("".to_string());
+
+    log::info!("Received backup paths: {}", backup_paths_string);
     let backup_paths = split(&backup_paths_string)
         .unwrap();
-    let bkp_config = backup_paths.iter().map(|s| (s, r".*"));
+    let bkp_name_pattern = r".*_(?P<year>\d+)-(?P<month>\d+)-(?P<day>\d+)_(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})";
+    let bkp_config = backup_paths.iter().map(|s| (s, bkp_name_pattern));
+    log::info!("Config: {:#?}", bkp_config);
 
     for (mount_path, bkp_pattern) in bkp_config {
         backups::measure_backup_freshness(mount_path, bkp_pattern, &backup_freshness);
