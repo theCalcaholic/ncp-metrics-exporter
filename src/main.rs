@@ -5,15 +5,12 @@ use prometheus_client::registry::Registry;
 use std::sync::{Arc, Mutex, MutexGuard};
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
-use tide::{Middleware, Next, Request};
 use tide::log;
 use std::env;
-use std::path::Iter;
-use std::fs::{File, read};
+use failure::Error;
+use std::fs::{File};
 use std::io::BufReader;
-use shellwords::split;
-use serde_json::{json, Result, Value};
-use tide::http::url::OpaqueOrigin;
+use serde_json::{Value};
 use crate::backups::BackupLabels;
 
 #[async_std::main]
@@ -28,13 +25,11 @@ async fn main() -> std::result::Result<(), std::io::Error> {
         backup_freshness.clone(),
     );
 
-    log::info!("Loading config from '{}/ncp-metrics.cfg'",
-                                  env::var("NCP_CONFIG_DIR")
-                                      .unwrap_or(String::from("/usr/local/etc")));
+    let config_dir = env::var("NCP_CONFIG_DIR")
+        .unwrap_or_else(|_| "/usr/local/etc".to_string());
+    log::info!("Loading config from '{}/ncp-metrics.cfg'", config_dir);
+    let file = File::open(format!("{}/ncp-metrics.cfg", config_dir))?;
 
-    let file = File::open(format!("{}/ncp-metrics.cfg",
-                                  env::var("NCP_CONFIG_DIR")
-                                      .unwrap_or(String::from("/usr/local/etc")))).unwrap();
     let reader = BufReader::new(file);
     let config: Value = serde_json::from_reader(reader).unwrap();
     log::info!("Found: {:#?}", config);
@@ -47,8 +42,12 @@ async fn main() -> std::result::Result<(), std::io::Error> {
 
     app.at("/metrics")
         .get(|req: tide::Request<State>| async move {
-            gather_metrics(&req.state().config.lock().unwrap(),
-                           &req.state().metric_backup_freshness.lock().unwrap());
+            if let Err(e) = gather_metrics(&req.state().config.lock().unwrap(),
+                           &req.state().metric_backup_freshness.lock().unwrap()) {
+
+                log::error!("Error collecting metrics: {}", e)
+            };
+
             let registry = &req.state().registry.lock().unwrap();
             let mut encoded = Vec::new();
             encode(&mut encoded, registry).unwrap();
@@ -72,26 +71,17 @@ struct State {
     config: Arc<Mutex<Value>>
 }
 
-fn gather_metrics(config: &MutexGuard<Value>, backup_freshness: &MutexGuard<Family<BackupLabels, Gauge>>) -> Option<()> {
-    let bkp_default_pattern = json!(r".*_(?P<year>\d+)-(?P<month>\d+)-(?P<day>\d+)_(?P<hour>\d{2})(?P<minute>\d{2})(?P<second>\d{2})");
-
-    let bkp_config = config["backups"].as_array().unwrap().iter().map(move |bkp_cfg| {
-        (bkp_cfg["path"].as_str().unwrap(),
-         bkp_cfg["pattern"].as_str().unwrap()) //.unwrap_or(&bkp_default_pattern.clone()).as_str().unwrap())
+fn gather_metrics(config: &MutexGuard<Value>, backup_freshness: &MutexGuard<Family<BackupLabels, Gauge>>) -> Result<(), Error> {
+    let bkp_config = config["backups"].as_array()
+        .expect("Could not parse configuration: .[\"backups\"] needs to be an array")
+        .iter().map(move |bkp_cfg| {
+        (bkp_cfg["path"].as_str().expect("Could not parse configuration: .[\"backups\"][\"path\"] is missing"),
+         bkp_cfg["pattern"].as_str().expect("Could not parse configuration: .[\"backups\"][\"pattern\"] is missing"),
+        ) //.unwrap_or(&bkp_default_pattern.clone()).as_str().unwrap())
     });
 
-    // let backup_paths_string = env::var("NCPMETRICS_BACKUP_PATHS")
-    //     .unwrap_or("".to_string());
-    //
-    // log::info!("Received backup paths: {}", backup_paths_string);
-    // let backup_paths = split(&backup_paths_string)
-    //     .unwrap();
-    //
-    // let bkp_config = backup_paths.iter().map(|s| (s, bkp_name_pattern));
-    // log::info!("Config: {:#?}", bkp_config);
-
     for (mount_path, bkp_pattern) in bkp_config {
-        backups::measure_backup_freshness(mount_path, bkp_pattern, &backup_freshness);
+        backups::measure_backup_freshness(mount_path, bkp_pattern, backup_freshness)?
     }
-    Some(())
+    Ok(())
 }

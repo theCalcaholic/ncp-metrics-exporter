@@ -1,14 +1,14 @@
-
 use prometheus_client::encoding::text::Encode;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
 use proc_mounts::{MountInfo, MountIter};
 use std::path::Path;
 use std::time::SystemTime;
-use regex::{Captures, Match, Regex};
+use regex::{Regex};
 use std::fs::DirEntry;
 use chrono::{DateTime, TimeZone};
 use chrono::prelude::Local;
+use failure::Error;
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
 pub(crate) struct BackupLabels {
@@ -22,61 +22,65 @@ pub(crate) fn get_backup_freshness() -> Family<BackupLabels, Gauge> {
     Family::<BackupLabels, Gauge>::default()
 }
 
-pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metric: &Family<BackupLabels, Gauge>) {
+pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metric: &Family<BackupLabels, Gauge>) -> Result<(), Error> {
 
-    let mount_point = MountIter::new().unwrap()
+    let mount_point = MountIter::new()?
         .find(|m| match &m {
             Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
             _ => false
-        }).unwrap().ok().unwrap();
+        }).expect(&*format!("Could not find any mount point containing '{}'", mount_path))?;
 
-    let bkp_regex = Regex::new(bkp_pattern).unwrap();
+    let bkp_regex = Regex::new(bkp_pattern)
+        .expect(&*format!("Invalid backup file pattern: '{}'", bkp_pattern));
 
-    let mut backups: Vec<DirEntry> = Path::new(mount_path).read_dir().unwrap()
+    let mut backups: Vec<DirEntry> = Path::new(mount_path).read_dir()
+        .expect(&*format!("Could not read directory contents for {}", mount_path))
         .filter_map(|f| match f {
-            Ok(d) if bkp_regex.is_match(d.file_name().to_str().unwrap()) => Some(d),
+            Ok(d) if bkp_regex.is_match(d.file_name().to_str()?) => Some(d),
             _ => None
         })
         .collect();
 
-    backups.sort_by_key(|bkp| {
-        let metadata = bkp.metadata().unwrap();
-        let metadata_time = metadata.created().unwrap_or(metadata.modified().unwrap());
+    backups.sort_by_key(move |bkp| {
+        let metadata = &bkp.metadata()
+            .expect(&*format!("Could not retrieve metadata for {:#?}", &bkp.file_name()));
+        let file_name = bkp.file_name().into_string()
+            .expect(&*format!("Failed to get file name for backup {:#?}", &bkp));
 
-        match date_from_file_name(bkp.file_name().to_str().unwrap().parse().unwrap(), bkp_pattern) {
+        match date_from_file_name(&file_name, bkp_pattern) {
             Some(dt) => SystemTime::from(dt),
-            None => metadata_time
+            None => metadata.created().or_else(|_| metadata.modified())
+                .expect(&*format!("Could not retrieve date time from backup {:#?}", &bkp))
         }
     });
 
-    if backups.is_empty() {
-        return;
-    }
 
 
-    let last_bkp_created = match date_from_file_name(
-        backups.last().unwrap().file_name().to_str().unwrap().parse().unwrap(),
-        bkp_pattern
-    ) {
-        Some(dt) => SystemTime::from(dt),
-        None => {
-            let last_bkp_metadata = backups.last().unwrap().metadata().unwrap();
-            last_bkp_metadata
-                .created()
-                .unwrap_or(last_bkp_metadata.modified().unwrap())
-        }
-    };
+    let last_bkp_created = match backups.last() {
+        None => Ok(SystemTime::UNIX_EPOCH),
+        Some(bkp) => {
+            let file_name = bkp.file_name().into_string()
+                .expect(&*format!("Failed to get file name for backup {:#?}", bkp));
+            match date_from_file_name(&file_name, bkp_pattern) {
+                Some(dt) => Ok(SystemTime::from(dt)),
+                None => match bkp.metadata() {
+                    Ok(metadata) => Ok(metadata.created().unwrap_or(metadata.modified()?)),
+                    Err(_) => Err(format!("Failed to retrieve backup metadata for {:#?}", bkp))
+                }
+            }
+        }}.expect("Failed to extract latest backup creation date");
 
     metric.get_or_create(&BackupLabels {
-        backups_disk: mount_point.source.to_str().unwrap().parse().unwrap(),
-        backups_path: mount_path.parse().unwrap(),
-        backup_pattern: bkp_pattern.parse().unwrap()
-        //latest_backup_path: backups.last().unwrap().path().to_str().unwrap().parse().unwrap()
+        backups_disk: mount_point.source.to_str()
+            .expect("Error extracting mount point source").parse()?,
+        backups_path: mount_path.parse()?,
+        backup_pattern: bkp_pattern.parse()?
     })
-        .set(SystemTime::now().duration_since(last_bkp_created).unwrap().as_secs());
+        .set(SystemTime::now().duration_since(last_bkp_created)?.as_secs());
+    Ok(())
 }
 
-fn date_from_file_name(file_name: String, pattern: &str) -> Option<DateTime<Local>> {
+fn date_from_file_name(file_name: &str, pattern: &str) -> Option<DateTime<Local>> {
     let regex = Regex::new(pattern).unwrap();
     match regex.captures(&*file_name)
     {
