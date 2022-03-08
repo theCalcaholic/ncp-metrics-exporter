@@ -5,7 +5,7 @@ use prometheus_client::metrics::gauge::Gauge;
 use proc_mounts::{MountInfo, MountIter};
 use std::path::Path;
 use std::time::SystemTime;
-use regex::{Captures, Regex};
+use regex::{Captures, Match, Regex};
 use std::fs::DirEntry;
 use chrono::{DateTime, TimeZone};
 use chrono::prelude::Local;
@@ -87,13 +87,14 @@ fn date_from_file_name(file_name: String, pattern: &str) -> Option<DateTime<Loca
             let hour = cap.name("hour");
             let minute = cap.name("minute");
             let second = cap.name("second");
-            if vec![year, month, day, hour, minute, second].iter().all(|g| g.is_some()) {
+            if vec![year, month, day].iter().all(|g| g.is_some()) {
                 let dt = Local.ymd(year.unwrap().as_str().parse().unwrap(),
-                                   month.unwrap().as_str().parse().unwrap(),
-                                   day.unwrap().as_str().parse().unwrap())
-                    .and_hms(hour.unwrap().as_str().parse().unwrap(),
-                             minute.unwrap().as_str().parse().unwrap(),
-                             second.unwrap().as_str().parse().unwrap());
+                          month.unwrap().as_str().parse().unwrap(),
+                          day.unwrap().as_str().parse().unwrap())
+                    .and_hms(
+                        hour.map_or(0, |m| m.as_str().parse().unwrap()),
+                        minute.map_or(0, |m| m.as_str().parse().unwrap()),
+                        second.map_or(0, |m|  m.as_str().parse().unwrap()));
                 return Some(dt);
             }
             None
