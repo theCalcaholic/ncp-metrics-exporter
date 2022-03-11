@@ -1,4 +1,6 @@
 use std::cmp::Reverse;
+use std::fmt;
+use std::fmt::Error;
 use prometheus_client::encoding::text::Encode;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
@@ -9,7 +11,7 @@ use regex::{Regex};
 use std::fs::DirEntry;
 use chrono::{DateTime, TimeZone};
 use chrono::prelude::Local;
-use failure::{Error};
+use failure::{Error as FError};
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
 pub(crate) struct BackupLabels {
@@ -23,20 +25,11 @@ pub(crate) fn get_backup_freshness() -> Family<BackupLabels, Gauge> {
     Family::<BackupLabels, Gauge>::default()
 }
 
-pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metric: &Family<BackupLabels, Gauge>) -> Result<(), Error> {
 
-    let mut mount_points = MountIter::new()?
-        .filter(|m| match m {
-            Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
-            _ => false
-        }).filter_map(|r| r.ok())
-        .collect::<Vec<MountInfo>>();
 
-    // Use longest match (nested mountpoints are a thing :P)
-    mount_points.sort_by_key(|mp| Reverse(mp.dest.to_str().unwrap().len()));
+pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metric: &Family<BackupLabels, Gauge>) -> Result<(), FError> {
 
-    let mount_point = &mount_points.get(0)
-        .expect("Could not find any mount point containing '{}'");
+    let mount_point = find_mount_point(mount_path)?;
 
     let bkp_regex = Regex::new(bkp_pattern)
         .expect(&*format!("Invalid backup file pattern: '{}'", bkp_pattern));
@@ -88,6 +81,22 @@ pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metr
     Ok(())
 }
 
+fn find_mount_point(mount_path: &str) -> Result<MountInfo, MountPointParsingError> {
+
+    let mut mount_points = MountIter::new()?
+        .filter(|m| match m {
+            Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
+            _ => false
+        }).filter_map(|r| r.ok())
+        .collect::<Vec<MountInfo>>();
+
+    // Use longest match (nested mountpoints are a thing :P)
+    mount_points.pop().ok_or(MountPointParsingError{
+        mount_path: format!("Could not find any mount point containing '{}'", mount_path),
+        inner: None
+    })
+}
+
 fn date_from_file_name(file_name: &str, pattern: &str) -> Option<DateTime<Local>> {
     let regex = Regex::new(pattern).unwrap();
     match regex.captures(&*file_name)
@@ -113,6 +122,35 @@ fn date_from_file_name(file_name: &str, pattern: &str) -> Option<DateTime<Local>
             }
         }
         _ => None
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MountPointParsingError {
+    mount_path: String,
+    inner: Option<String>
+}
+
+impl fmt::Display for MountPointParsingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut msg = format!("Could not find a valid mountpoint for {}", self.mount_path);
+        if let Some(inner) = &self.inner {
+            msg += &*format!(": {}", inner);
+        }
+        write!(f, "{}", msg)
+    }
+}
+
+impl std::error::Error for MountPointParsingError {
+
+}
+
+impl From<std::io::Error> for MountPointParsingError {
+    fn from(e: std::io::Error) -> Self {
+        MountPointParsingError{
+            mount_path: "<unknown>".to_string(),
+            inner: Option::from(e.to_string())
+        }
     }
 }
 
