@@ -1,3 +1,4 @@
+use std::cmp::Reverse;
 use prometheus_client::encoding::text::Encode;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
@@ -24,11 +25,18 @@ pub(crate) fn get_backup_freshness() -> Family<BackupLabels, Gauge> {
 
 pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metric: &Family<BackupLabels, Gauge>) -> Result<(), Error> {
 
-    let mount_point = MountIter::new()?
-        .find(|m| match &m {
+    let mut mount_points = MountIter::new()?
+        .filter(|m| match m {
             Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
             _ => false
-        }).expect(&*format!("Could not find any mount point containing '{}'", mount_path))?;
+        }).filter_map(|r| r.ok())
+        .collect::<Vec<MountInfo>>();
+
+    // Use longest match (nested mountpoints are a thing :P)
+    mount_points.sort_by_key(|mp| Reverse(mp.dest.to_str().unwrap().len()));
+
+    let mount_point = &mount_points.get(0)
+        .expect("Could not find any mount point containing '{}'");
 
     let bkp_regex = Regex::new(bkp_pattern)
         .expect(&*format!("Invalid backup file pattern: '{}'", bkp_pattern));
