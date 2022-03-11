@@ -1,6 +1,4 @@
-use std::cmp::Reverse;
 use std::fmt;
-use std::fmt::Error;
 use prometheus_client::encoding::text::Encode;
 use prometheus_client::metrics::family::Family;
 use prometheus_client::metrics::gauge::Gauge;
