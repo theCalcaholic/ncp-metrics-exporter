@@ -31,6 +31,35 @@ pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metr
 
     let mount_point = find_mount_point(mount_path)?;
 
+    let last_bkp_created = find_latest_backup_time(bkp_pattern, mount_path)?;
+
+    metric.get_or_create(&BackupLabels {
+        backups_disk: mount_point.source.to_str()
+            .expect("Error extracting mount point source").parse()?,
+        backups_path: mount_path.parse()?,
+        backup_pattern: bkp_pattern.parse()?
+    })
+        .set(SystemTime::now().duration_since(last_bkp_created)?.as_secs());
+    Ok(())
+}
+
+fn find_mount_point(mount_path: &str) -> Result<MountInfo, MountPointParsingError> {
+
+    let mut mount_points = MountIter::new()?
+        .filter(|m| match m {
+            Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
+            _ => false
+        }).filter_map(|r| r.ok())
+        .collect::<Vec<MountInfo>>();
+
+    // Use longest match (nested mountpoints are a thing :P)
+    mount_points.pop().ok_or(MountPointParsingError{
+        mount_path: format!("Could not find any mount point containing '{}'", mount_path),
+        inner: None
+    })
+}
+
+fn find_latest_backup_time(bkp_pattern: &str, mount_path: &str) -> Result<SystemTime, BackupParsingError> {
     let bkp_regex = Regex::new(bkp_pattern)
         .expect(&*format!("Invalid backup file pattern: '{}'", bkp_pattern));
 
@@ -57,7 +86,7 @@ pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metr
 
 
 
-    let last_bkp_created = match backups.last() {
+    match backups.last() {
         None => Ok(SystemTime::UNIX_EPOCH),
         Some(bkp) => {
             let file_name = bkp.file_name().into_string()
@@ -66,35 +95,12 @@ pub(crate) fn measure_backup_freshness(mount_path: &str, bkp_pattern: &str, metr
                 Some(dt) => Ok(SystemTime::from(dt)),
                 None => match bkp.metadata() {
                     Ok(metadata) => Ok(metadata.created().unwrap_or(metadata.modified()?)),
-                    Err(_) => Err(format!("Failed to retrieve backup metadata for {:#?}", bkp))
+                    Err(_) => Err(BackupParsingError{
+                        message: format!("Failed to retrieve backup metadata for {:#?}", bkp)
+                    })
                 }
             }
-        }}.expect("Failed to extract latest backup creation date");
-
-    metric.get_or_create(&BackupLabels {
-        backups_disk: mount_point.source.to_str()
-            .expect("Error extracting mount point source").parse()?,
-        backups_path: mount_path.parse()?,
-        backup_pattern: bkp_pattern.parse()?
-    })
-        .set(SystemTime::now().duration_since(last_bkp_created)?.as_secs());
-    Ok(())
-}
-
-fn find_mount_point(mount_path: &str) -> Result<MountInfo, MountPointParsingError> {
-
-    let mut mount_points = MountIter::new()?
-        .filter(|m| match m {
-            Ok(MountInfo { ref dest, .. }) => mount_path.starts_with(dest.to_str().unwrap()),
-            _ => false
-        }).filter_map(|r| r.ok())
-        .collect::<Vec<MountInfo>>();
-
-    // Use longest match (nested mountpoints are a thing :P)
-    mount_points.pop().ok_or(MountPointParsingError{
-        mount_path: format!("Could not find any mount point containing '{}'", mount_path),
-        inner: None
-    })
+        }}
 }
 
 fn date_from_file_name(file_name: &str, pattern: &str) -> Option<DateTime<Local>> {
@@ -151,6 +157,25 @@ impl From<std::io::Error> for MountPointParsingError {
             mount_path: "<unknown>".to_string(),
             inner: Option::from(e.to_string())
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BackupParsingError {
+    message: String
+}
+
+impl fmt::Display for BackupParsingError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Error parsing backup: {}", self.message)
+    }
+}
+
+impl std::error::Error for BackupParsingError { }
+
+impl From<std::io::Error> for BackupParsingError {
+    fn from(e: std::io::Error) -> Self {
+        BackupParsingError{ message: format!("Received io::ERROR( \"{}\" )", e.to_string()) }
     }
 }
 
