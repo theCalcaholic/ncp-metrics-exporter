@@ -8,7 +8,7 @@ use regex::{Regex};
 use std::fs::DirEntry;
 use chrono::{DateTime, TimeZone};
 use chrono::prelude::Local;
-use failure::Error;
+use failure::{Error};
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
 pub(crate) struct BackupLabels {
@@ -85,24 +85,80 @@ fn date_from_file_name(file_name: &str, pattern: &str) -> Option<DateTime<Local>
     match regex.captures(&*file_name)
     {
         Some(cap) => {
-            let year = cap.name("year");
-            let month = cap.name("month");
-            let day = cap.name("day");
-            let hour = cap.name("hour");
-            let minute = cap.name("minute");
-            let second = cap.name("second");
-            if vec![year, month, day].iter().all(|g| g.is_some()) {
-                let dt = Local.ymd(year.unwrap().as_str().parse().unwrap(),
-                          month.unwrap().as_str().parse().unwrap(),
-                          day.unwrap().as_str().parse().unwrap())
-                    .and_hms(
-                        hour.map_or(0, |m| m.as_str().parse().unwrap()),
-                        minute.map_or(0, |m| m.as_str().parse().unwrap()),
-                        second.map_or(0, |m|  m.as_str().parse().unwrap()));
-                return Some(dt);
+            let date_values = [
+                cap.name("year"), cap.name("month"), cap.name("day"),
+                cap.name("hour"), cap.name("minute"), cap.name("second")
+            ]
+                .map(|o| match o {
+                    Some(m) => m.as_str().parse::<u32>().ok(),
+                    None => None
+                });
+
+            match date_values[..] {
+                [Some(year), Some(month), Some(day), hour, minute, second] => {
+                    Some(Local.ymd(year as i32, month, day)
+                        .and_hms(hour.unwrap_or(0),
+                                 minute.unwrap_or(0),
+                                 second.unwrap_or(0)))
+                },
+                _ => None
             }
-            None
         }
         _ => None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Datelike, Timelike};
+    use super::*;
+
+    fn assert_date_equals(dt: DateTime<Local>, values: (i32, u32, u32, u32, u32, u32)) {
+        let (year, month, day, hour, minute, second) = values;
+        let date = dt.date();
+        assert_eq!(date.year(), year);
+        assert_eq!(date.month(), month);
+        assert_eq!(date.day(), day);
+
+        let time = dt.time();
+        assert_eq!(time.hour(), hour);
+        assert_eq!(time.minute(), minute);
+        assert_eq!(time.second(), second);
+    }
+
+    #[test]
+    fn test_date_from_file_name() {
+
+        // Case 1: successful extraction without time
+        let mut pattern = r".*-(?P<year>\d+)-(?P<month>\d+)-(?P<day>\d+)\.ext";
+        let mut file_name = "testfile-2022-03-11.ext";
+
+        let mut dt = date_from_file_name(file_name, pattern);
+        assert!(dt.is_some());
+        assert_date_equals(dt.unwrap(), (2022, 03, 11, 0, 0, 0));
+
+        // Case 2: successful extraction with time
+        pattern = r".*-(?P<year>\d+)-(?P<month>\d+)-(?P<day>\d+)_(?P<hour>\d{2}):(?P<minute>\d{2}):(?P<second>\d{2}).ext";
+        file_name = "testfile-2022-03-11_10:08:22.ext";
+        dt = date_from_file_name(file_name, pattern);
+
+        assert!(dt.is_some());
+        assert_date_equals(dt.unwrap(), (2022, 03, 11, 10, 8, 22));
+
+        // Case 3: invalid file name (not an int)
+
+        pattern = pattern;
+        file_name = "testfile-2022-OCT-11_10:08:22.ext";
+        dt = date_from_file_name(file_name, pattern);
+        assert!(dt.is_none());
+
+        // Case 4: file name doesn't match pattern
+
+        pattern = pattern;
+        file_name = "testfile-2022-08.ext";
+        dt = date_from_file_name(file_name, pattern);
+        assert!(dt.is_none());
+
+
     }
 }

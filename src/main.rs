@@ -73,14 +73,13 @@ struct State {
 
 fn gather_metrics(config: &MutexGuard<Value>, backup_freshness: &MutexGuard<Family<BackupLabels, Gauge>>) -> Result<(), Error> {
     let bkp_config = config["backups"].as_array()
-        .expect("Could not parse configuration: .[\"backups\"] needs to be an array")
-        .iter().map(move |bkp_cfg| {
-        (bkp_cfg["path"].as_str().expect("Could not parse configuration: .[\"backups\"][\"path\"] is missing"),
-         bkp_cfg["pattern"].as_str().expect("Could not parse configuration: .[\"backups\"][\"pattern\"] is missing"),
-        ) //.unwrap_or(&bkp_default_pattern.clone()).as_str().unwrap())
-    });
+        .expect("Could not parse configuration: .[\"backups\"] needs to be an array");
 
-    for (mount_path, bkp_pattern) in bkp_config {
+    for bkp in bkp_config {
+        let mount_path = bkp["path"].as_str()
+            .expect("Could not parse configuration: .[\"backups\"][\"path\"] is missing");
+        let bkp_pattern= bkp["pattern"].as_str()
+            .expect("Could not parse configuration: .[\"backups\"][\"pattern\"] is missing");
         backups::measure_backup_freshness(mount_path, bkp_pattern, backup_freshness)?
     }
     Ok(())
