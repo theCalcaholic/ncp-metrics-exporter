@@ -80,7 +80,12 @@ fn gather_metrics(config: &MutexGuard<Value>, backup_freshness: &MutexGuard<Fami
             .expect("Could not parse configuration: .[\"backups\"][\"path\"] is missing");
         let bkp_pattern= bkp["pattern"].as_str()
             .expect("Could not parse configuration: .[\"backups\"][\"pattern\"] is missing");
-        backups::measure_backup_freshness(mount_path, bkp_pattern, backup_freshness)?
+        match backups::measure_backup_freshness(mount_path, bkp_pattern, backup_freshness) {
+            Ok(_) => {},
+            Err(e) => {
+                log::warn!("{}", e);
+            }
+        }
     }
     Ok(())
 }
