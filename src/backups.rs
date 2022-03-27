@@ -61,13 +61,16 @@ fn find_latest_backup_time(bkp_pattern: &str, mount_path: &str) -> Result<System
     let bkp_regex = Regex::new(bkp_pattern)
         .expect(&*format!("Invalid backup file pattern: '{}'", bkp_pattern));
 
-    let mut backups: Vec<DirEntry> = Path::new(mount_path).read_dir()
-        .expect(&*format!("Could not read directory contents for {}", mount_path))
-        .filter_map(|f| match f {
-            Ok(d) if bkp_regex.is_match(d.file_name().to_str()?) => Some(d),
-            _ => None
-        })
-        .collect();
+    let mut backups: Vec<DirEntry> = match Path::new(mount_path).read_dir() {
+        Ok(dir) => {
+            dir.filter_map(| f | match f {
+                Ok(d) if bkp_regex.is_match(d.file_name().to_str() ? ) => Some(d),
+                _ => None
+            }).collect()
+        },
+        // Err(e) => Err(format!("Could not read directory contents for {}", mount_path))
+        Err(_e) => vec![]
+    };
 
     backups.sort_by_key(move |bkp| {
         let metadata = &bkp.metadata()
@@ -82,7 +85,10 @@ fn find_latest_backup_time(bkp_pattern: &str, mount_path: &str) -> Result<System
         }
     });
 
-
+    if backups.is_empty() {
+        return Err(BackupParsingError{message: format!("No backups found matching {}/{}",
+                                                       mount_path, bkp_pattern)})
+    }
 
     match backups.last() {
         None => Ok(SystemTime::UNIX_EPOCH),
