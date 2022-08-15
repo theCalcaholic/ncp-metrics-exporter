@@ -1,4 +1,6 @@
 mod backups;
+mod diagnostics;
+mod util;
 
 use prometheus_client::encoding::text::encode;
 use prometheus_client::registry::Registry;
