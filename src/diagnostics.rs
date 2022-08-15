@@ -12,7 +12,6 @@ use prometheus_client::metrics::gauge::Gauge;
 use nix::sys::utsname::uname;
 use failure::{Error as FError};
 use tide::StatusCode::Continue;
-use crate::util::get_json_value_from_string;
 
 
 #[derive(Clone, Hash, PartialEq, Eq, Encode)]
